@@ -52,34 +52,38 @@ class Manager {
     }
 
     bool
-    ReserveLoadingResourceWithTimeout(const ResourceUsage& size, std::chrono::milliseconds timeout) {
+    ReserveLoadingResourceWithTimeout(const ResourceUsage& size, std::chrono::milliseconds timeout, const std::string& log_info = "") {
         auto result = SemiInlineGet(dlist_->ReserveLoadingResourceWithTimeout(size, timeout));
         if (result) {
             monitor::cache_loading_bytes(CellDataType::OTHER, StorageType::MEMORY).Increment(size.memory_bytes);
             monitor::cache_loading_bytes(CellDataType::OTHER, StorageType::DISK).Increment(size.file_bytes);
+            LOG_TRACE("[MCL] ReserveLoadingResourceWithTimeout: log_info=({}), size={}", log_info, size.ToString());
         }
         return result;
     }
 
     void
-    ReleaseLoadingResource(const ResourceUsage& size) {
+    ReleaseLoadingResource(const ResourceUsage& size, const std::string& log_info = "") {
         dlist_->ReleaseLoadingResource(size);
         monitor::cache_loading_bytes(CellDataType::OTHER, StorageType::MEMORY).Decrement(size.memory_bytes);
         monitor::cache_loading_bytes(CellDataType::OTHER, StorageType::DISK).Decrement(size.file_bytes);
+        LOG_TRACE("[MCL] ReleaseLoadingResource: log_info=({}), size={}", log_info, size.ToString());
     }
 
     void
-    ChargeLoadedResource(const ResourceUsage& size) {
+    ChargeLoadedResource(const ResourceUsage& size, const std::string& log_info = "") {
         monitor::cache_loaded_bytes(CellDataType::OTHER, StorageType::MEMORY).Increment(size.memory_bytes);
         monitor::cache_loaded_bytes(CellDataType::OTHER, StorageType::DISK).Increment(size.file_bytes);
         dlist_->ChargeLoadedResource(size);
+        LOG_TRACE("[MCL] ChargeLoadedResource: log_info=({}), size={}", log_info, size.ToString());
     }
 
     void
-    RefundLoadedResource(const ResourceUsage& size) {
+    RefundLoadedResource(const ResourceUsage& size, const std::string& log_info = "") {
         dlist_->RefundLoadedResource(size);
         monitor::cache_loaded_bytes(CellDataType::OTHER, StorageType::MEMORY).Decrement(size.memory_bytes);
         monitor::cache_loaded_bytes(CellDataType::OTHER, StorageType::DISK).Decrement(size.file_bytes);
+        LOG_TRACE("[MCL] RefundLoadedResource: log_info=({}), size={}", log_info, size.ToString());
     }
 
     // memory overhead for managing all cache slots/cells/translators/policies.
