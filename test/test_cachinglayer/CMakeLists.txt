@@ -9,7 +9,6 @@
 # is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 # or implied. See the License for the specific language governing permissions and limitations under the License
 
-
 find_package(GTest CONFIG REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(BLAS REQUIRED)
@@ -19,6 +18,7 @@ set(CACHINGLAYER_TEST_FILES
     test_dlist.cpp
     test_cache_slot.cpp
     test_tiered_storage_config.cpp
+    test_loading_overhead_tracker.cpp
     test_utils.cpp
 )
 
