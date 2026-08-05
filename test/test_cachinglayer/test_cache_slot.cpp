@@ -1849,6 +1849,46 @@ TEST(CacheSlotTrackerTest, LoadingOverheadTrackerCleanupOnException) {
     EXPECT_EQ(release.memory_bytes, 500);
 }
 
+TEST(CacheSlotTrackerTest, ZeroByteTrackerReservationIsSuccessfulAndReleased) {
+    ResourceUsage limit{100, 0};
+    auto dlist = std::make_shared<DList>(true, limit, limit, limit, EvictionConfig{10, false, 600});
+
+    auto tracker = std::make_shared<LoadingOverheadTracker>();
+    dlist->SetLoadingOverheadTracker(tracker);
+
+    auto overhead_handle = tracker->Register("zero-byte-reservation", {100, 0});
+    auto pre_reservation = std::move(dlist->ReserveLoadingResourceWithTimeout({0, 0}, {100, 0}, overhead_handle,
+                                                                              std::chrono::milliseconds(100)))
+                               .get();
+    ASSERT_TRUE(pre_reservation.success);
+    ASSERT_EQ(pre_reservation.reserved, (ResourceUsage{100, 0}));
+
+    auto translator = std::make_unique<MockTranslator>(std::vector<std::pair<cid_t, int64_t>>{{0, 0}},
+                                                       std::unordered_map<cl_uid_t, cid_t>{{0, 0}},
+                                                       "zero_byte_tracker_reservation", StorageType::MEMORY);
+    translator->SetLoadingOverheadBytes(50);
+    translator->SetLoadingOverheadConfig("zero-byte-reservation", {100, 0});
+    auto* translator_ptr = translator.get();
+
+    auto cache_slot =
+        std::make_shared<CacheSlot<TestCell>>(std::move(translator), dlist.get(), true, true, false,
+                                              std::chrono::milliseconds(5000), std::chrono::milliseconds(0));
+    auto op_ctx = std::make_unique<milvus::OpContext>();
+
+    std::shared_ptr<CellAccessor<TestCell>> accessor;
+    EXPECT_NO_THROW(accessor = cache_slot->PinCellsDirect(op_ctx.get(), {0}));
+    EXPECT_NE(accessor, nullptr);
+    EXPECT_EQ(translator_ptr->GetCellsCallCount(), 1);
+
+    auto released = dlist->ReleaseLoadingResource({0, 0}, {100, 0}, overhead_handle);
+    EXPECT_EQ(released, (ResourceUsage{100, 0}));
+    EXPECT_EQ(DListTestFriend::get_loading_memory(*dlist), ResourceUsage{});
+
+    accessor.reset();
+    cache_slot.reset();
+    tracker->Unregister(overhead_handle);
+}
+
 // Test bonus cells retry path with tracker: essential+bonus exceeds DList capacity,
 // falls back to essential-only which succeeds.
 TEST(CacheSlotTrackerTest, BonusCellsRetryWithTracker) {

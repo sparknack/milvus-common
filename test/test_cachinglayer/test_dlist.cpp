@@ -1197,3 +1197,31 @@ TEST_F(DListTest, ReserveWithZeroTimeoutEvictsAndSucceeds) {
 
     dlist->ReleaseLoadingResource(reserve_size);
 }
+
+TEST_F(DListTest, CappedTrackerWaiterIsNotRejectedByUncappedSize) {
+    const ResourceUsage limit{100, 0};
+    dlist = std::make_shared<DList>(true, limit, limit, limit, EvictionConfig{10, false, 100});
+
+    auto tracker = std::make_shared<milvus::cachinglayer::LoadingOverheadTracker>();
+    dlist->SetLoadingOverheadTracker(tracker);
+    auto overhead_handle = tracker->Register("capped-waiter", {20, 0});
+
+    ASSERT_TRUE(std::move(dlist->ReserveLoadingResourceWithTimeout({100, 0}, std::chrono::milliseconds(100))).get());
+
+    auto future =
+        dlist->ReserveLoadingResourceWithTimeout({70, 0}, {100, 0}, overhead_handle, std::chrono::milliseconds(-1));
+
+    // The capped request needs 90 bytes, so releasing 20 bytes is not enough yet.
+    // Its uncapped estimate is 170 bytes, but that must not make it permanently fail.
+    dlist->ReleaseLoadingResource({20, 0});
+    EXPECT_FALSE(future.isReady());
+
+    dlist->ReleaseLoadingResource({80, 0});
+    auto reservation = std::move(future).get();
+    ASSERT_TRUE(reservation.success);
+    EXPECT_EQ(reservation.reserved, (ResourceUsage{90, 0}));
+
+    EXPECT_EQ(dlist->ReleaseLoadingResource({70, 0}, {100, 0}, overhead_handle), (ResourceUsage{90, 0}));
+    tracker->Unregister(overhead_handle);
+    EXPECT_EQ(get_loading_memory(), ResourceUsage{});
+}

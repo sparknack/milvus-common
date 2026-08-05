@@ -35,7 +35,7 @@ ClampNonNegative(std::atomic<ResourceUsage>& counter, LogFn&& log_fn) {
     }
 }
 
-folly::SemiFuture<ResourceUsage>
+folly::SemiFuture<LoadingResourceReservation>
 DList::ReserveLoadingResourceWithTimeout(const ResourceUsage& loaded, const ResourceUsage& overhead,
                                          uint64_t overhead_handle, std::chrono::milliseconds timeout, OpContext* ctx) {
     // Quick reject: if even loaded alone (minimum possible) exceeds capacity, fail fast.
@@ -44,21 +44,21 @@ DList::ReserveLoadingResourceWithTimeout(const ResourceUsage& loaded, const Reso
     if (!max_resource_limit_.load().CanHold(min_possible)) {
         LOG_ERROR("[MCL] Failed to reserve loaded={} as it exceeds max_memory_={}.", loaded.ToString(),
                   max_resource_limit_.load().ToString());
-        return folly::makeSemiFuture(ResourceUsage{});
+        return folly::makeSemiFuture(LoadingResourceReservation{});
     }
     auto [success, actual] =
         reserveResourceInternalWithTracker(loaded, overhead, overhead_handle, loading_overhead_tracker_.get());
     if (success) {
-        return folly::makeSemiFuture(actual);
+        return folly::makeSemiFuture(LoadingResourceReservation{true, actual});
     }
 
     if (timeout.count() == 0) {
-        return folly::makeSemiFuture(ResourceUsage{});
+        return folly::makeSemiFuture(LoadingResourceReservation{});
     }
 
     auto deadline =
         timeout.count() > 0 ? std::chrono::steady_clock::now() + timeout : std::chrono::steady_clock::time_point::max();
-    auto [promise, future] = folly::makePromiseContract<ResourceUsage>();
+    auto [promise, future] = folly::makePromiseContract<LoadingResourceReservation>();
     uint64_t request_id = next_request_id_.fetch_add(1);
 
     auto waiting_request =
@@ -856,16 +856,24 @@ DList::handleWaitingRequests() {
             requests_to_destroy.push_back(std::move(request));
             waiting_queue_.pop();
         } else {
-            // Check if this request is permanently impossible (required size exceeds capacity).
-            // Use required_size for both paths: (loaded + overhead) * factor for tracker-aware,
-            // which is the upper bound of what the request could need.
-            if (!max_resource_limit_.load().CanHold(request_ptr_ref->required_size)) {
+            // A finite tracker cap can reduce the overhead delta as other requests overlap.
+            // Only the loaded portion is permanently required; uncapped requests still use
+            // their full required_size for this check.
+            auto minimum_required = request_ptr_ref->required_size;
+            if (request_ptr_ref->use_resource_promise &&
+                request_ptr_ref->overhead_handle != LoadingOverheadTracker::kInvalidHandle &&
+                loading_overhead_tracker_ &&
+                loading_overhead_tracker_->HasFiniteUpperBound(request_ptr_ref->overhead_handle)) {
+                minimum_required = request_ptr_ref->loaded * eviction_config_.loading_resource_factor;
+            }
+            auto capacity = max_resource_limit_.load();
+            if (!capacity.CanHold(minimum_required)) {
                 auto request = std::move(request_ptr_ref);
                 if (waiting_requests_map_.erase(request->request_id) > 0) {
                     LOG_WARN(
-                        "[MCL] Request {} is permanently impossible (required_size={} > capacity={}), "
+                        "[MCL] Request {} is permanently impossible (minimum_required={} > capacity={}), "
                         "failing immediately.",
-                        request->request_id, request->required_size.ToString(), max_resource_limit_.load().ToString());
+                        request->request_id, minimum_required.ToString(), capacity.ToString());
                     request->setValue(false);
                 }
                 requests_to_destroy.push_back(std::move(request));

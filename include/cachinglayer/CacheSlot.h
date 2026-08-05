@@ -467,9 +467,9 @@ class CacheSlot final : public std::enable_shared_from_this<CacheSlot<CellT>> {
             // If that fails, fall back to essential-only with the real timeout.
             // This avoids blocking in the waiting queue for a bonus attempt that could retry immediately.
             auto reserve_timeout = bonus_cids.empty() ? timeout : std::chrono::milliseconds(0);
-            auto actual_dlist_reserve = SemiInlineGet(dlist_->ReserveLoadingResourceWithTimeout(
+            auto reservation = SemiInlineGet(dlist_->ReserveLoadingResourceWithTimeout(
                 loaded_resource, loading_overhead, overhead_handle_, reserve_timeout, ctx));
-            bool reservation_success = actual_dlist_reserve.AnyGTZero();
+            bool reservation_success = reservation.success;
 
             // Guard: releases DList + tracker atomically. All by-ref so bonus retry
             // updates are reflected automatically.
@@ -506,9 +506,9 @@ class CacheSlot final : public std::enable_shared_from_this<CacheSlot<CellT>> {
                         "essential loading resource");
                     loaded_resource = essential_loaded_resource;
                     loading_overhead = essential_loading_overhead;
-                    actual_dlist_reserve = SemiInlineGet(dlist_->ReserveLoadingResourceWithTimeout(
+                    reservation = SemiInlineGet(dlist_->ReserveLoadingResourceWithTimeout(
                         loaded_resource, loading_overhead, overhead_handle_, timeout, ctx));
-                    reservation_success = actual_dlist_reserve.AnyGTZero();
+                    reservation_success = reservation.success;
                 } else {
                     loading_cids.insert(loading_cids.end(), bonus_cids.begin(), bonus_cids.end());
                 }
@@ -520,18 +520,18 @@ class CacheSlot final : public std::enable_shared_from_this<CacheSlot<CellT>> {
                     "cells: key={}, cell_ids=[{}], "
                     "loaded_resource={}, loading_overhead={}, actual_dlist_reserve={}",
                     translator_->key(), fmt::join(loading_cids, ","), loaded_resource.ToString(),
-                    loading_overhead.ToString(), actual_dlist_reserve.ToString());
+                    loading_overhead.ToString(), reservation.reserved.ToString());
                 ThrowInfo(ErrorCode::InsufficientResource,
                           "[MCL] CacheSlot failed to reserve resource for "
                           "cells: key={}, cell_ids=[{}], "
                           "loaded_resource={}, loading_overhead={}, actual_dlist_reserve={}",
                           translator_->key(), fmt::join(loading_cids, ","), loaded_resource.ToString(),
-                          loading_overhead.ToString(), actual_dlist_reserve.ToString());
+                          loading_overhead.ToString(), reservation.reserved.ToString());
             }
 
             monitor::cache_loading_bytes(cell_data_type_, StorageType::MEMORY)
-                .Increment(actual_dlist_reserve.memory_bytes);
-            monitor::cache_loading_bytes(cell_data_type_, StorageType::DISK).Increment(actual_dlist_reserve.file_bytes);
+                .Increment(reservation.reserved.memory_bytes);
+            monitor::cache_loading_bytes(cell_data_type_, StorageType::DISK).Increment(reservation.reserved.file_bytes);
             loading_cids_count = loading_cids.size();
             monitor::cache_cell_loading_count(cell_data_type_, storage_type_).Increment(loading_cids_count);
             metrics_tracked = true;
@@ -544,7 +544,7 @@ class CacheSlot final : public std::enable_shared_from_this<CacheSlot<CellT>> {
                 std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
                         .count() *
                     1.0 / 1000,
-                loaded_resource.ToString(), loading_overhead.ToString(), actual_dlist_reserve.ToString(),
+                loaded_resource.ToString(), loading_overhead.ToString(), reservation.reserved.ToString(),
                 translator_->key());
 
             run_load_internal();
