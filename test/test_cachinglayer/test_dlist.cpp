@@ -1225,3 +1225,18 @@ TEST_F(DListTest, CappedTrackerWaiterIsNotRejectedByUncappedSize) {
     tracker->Unregister(overhead_handle);
     EXPECT_EQ(get_loading_memory(), ResourceUsage{});
 }
+
+TEST_F(DListTest, UncappedOversizedTrackerReservationFailsImmediately) {
+    const ResourceUsage limit{100, 0};
+    dlist = std::make_shared<DList>(true, limit, limit, limit, EvictionConfig{10, false, 100});
+
+    auto tracker = std::make_shared<milvus::cachinglayer::LoadingOverheadTracker>();
+    dlist->SetLoadingOverheadTracker(tracker);
+
+    auto future = dlist->ReserveLoadingResourceWithTimeout(
+        {70, 0}, {40, 0}, milvus::cachinglayer::LoadingOverheadTracker::kInvalidHandle, std::chrono::milliseconds(-1));
+
+    ASSERT_TRUE(future.isReady());
+    EXPECT_FALSE(std::move(future).get().success);
+    EXPECT_EQ(get_loading_memory(), ResourceUsage{});
+}

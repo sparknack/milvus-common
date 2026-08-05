@@ -38,11 +38,17 @@ ClampNonNegative(std::atomic<ResourceUsage>& counter, LogFn&& log_fn) {
 folly::SemiFuture<LoadingResourceReservation>
 DList::ReserveLoadingResourceWithTimeout(const ResourceUsage& loaded, const ResourceUsage& overhead,
                                          uint64_t overhead_handle, std::chrono::milliseconds timeout, OpContext* ctx) {
-    // Quick reject: if even loaded alone (minimum possible) exceeds capacity, fail fast.
-    auto min_possible = loaded * eviction_config_.loading_resource_factor;
+    // A finite group cap may reduce the overhead delta to zero as peer loads overlap.
+    // Uncapped requests always require their full loaded usage plus overhead.
+    auto min_possible = loaded + overhead;
+    if (overhead_handle != LoadingOverheadTracker::kInvalidHandle && loading_overhead_tracker_ &&
+        loading_overhead_tracker_->HasFiniteUpperBound(overhead_handle)) {
+        min_possible = loaded;
+    }
+    min_possible = min_possible * eviction_config_.loading_resource_factor;
     std::unique_lock<std::mutex> lock(list_mtx_);
     if (!max_resource_limit_.load().CanHold(min_possible)) {
-        LOG_ERROR("[MCL] Failed to reserve loaded={} as it exceeds max_memory_={}.", loaded.ToString(),
+        LOG_ERROR("[MCL] Failed to reserve minimum required={} as it exceeds max_memory_={}.", min_possible.ToString(),
                   max_resource_limit_.load().ToString());
         return folly::makeSemiFuture(LoadingResourceReservation{});
     }
