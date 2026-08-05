@@ -56,7 +56,7 @@ class CacheSlot final : public std::enable_shared_from_this<CacheSlot<CellT>> {
 
     CacheSlot(std::unique_ptr<Translator<CellT>> translator, internal::DList* dlist, bool evictable, bool self_reserve,
               bool storage_usage_tracking_enabled, std::chrono::milliseconds loading_timeout,
-              std::chrono::milliseconds warmup_loading_timeout)
+              std::chrono::milliseconds warmup_loading_timeout = std::chrono::milliseconds(0))
         : translator_(std::move(translator)),
           cell_id_mapping_mode_(translator_->meta()->cell_id_mapping_mode),
           cell_data_type_(translator_->meta()->cell_data_type),
@@ -405,8 +405,9 @@ class CacheSlot final : public std::enable_shared_from_this<CacheSlot<CellT>> {
     RunLoad(OpContext* ctx, std::unordered_set<cid_t>&& cids, std::chrono::milliseconds timeout) {
         // loaded_resource: the estimated final resource usage (from .first), reserved unconditionally.
         // loading_overhead: the estimated temporary overhead during loading (from .second),
-        //   capped at per-type UB via LoadingOverheadTracker. The tracker returns the incremental
-        //   delta to reserve from DList, so total loading in DList = min(sum, UB) per type.
+        //   capped at the configured group UB via LoadingOverheadTracker.
+        //   The tracker returns the incremental delta to reserve from DList,
+        //   so total loading in DList = min(sum, UB) per group.
         std::vector<cid_t> loading_cids;
         try {
             auto start = std::chrono::steady_clock::now();
